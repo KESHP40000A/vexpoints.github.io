@@ -3576,14 +3576,26 @@ selectBreakFlag = function(flagObj) {
 
 // Initialize all buttons when page loads
 // Find this section and add the new button:
-window.addEventListener('load', () => {
+window.addEventListener("load", () => {
+  // Wait for image to be fully loaded before positioning anything
+  if (myImage.complete) {
+    initializeUI();
+  } else {
+    myImage.onload = initializeUI;
+  }
+});
+
+function initializeUI() {
+  updateLayout(); // Recalculate all positions first
   createRightSidebarButtons();
   createLeftSidebarButtons();
   createCollapseButton();
   createRightCollapseButton();
   createDataSidebar();
-  createRightExtraSidebar(); // ADD THIS LINE - create it immediately but keep it hidden
-});
+  createRightExtraSidebar();
+  createIcons(); // Create icons after layout is set
+  updateIconPositions(); // Position them correctly
+}
 
 // Download functionality
 function downloadState() {
@@ -4158,5 +4170,6 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
+
 
 

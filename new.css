@@ -837,3 +837,7 @@ body {
   box-sizing: border-box;
   pointer-events: auto; /* ADD THIS */
 }
+
+.icon {
+  display: none !important;
+}

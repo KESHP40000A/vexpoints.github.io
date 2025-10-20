@@ -11,6 +11,13 @@ let ilength = rheight/2.4;
 const myImage = new Image(iwidth, iwidth);
 myImage.src = 'field.jpeg';
 
+myImage.onload = function() {
+  updateLayout();
+  if (spawnedPoints.length > 0) {
+    updateAllCurves();
+  }
+};
+
 let foot = iwidth/12;
 let finch = foot/12;
 let currentUnit = 'inch';
@@ -4147,3 +4154,4 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
+

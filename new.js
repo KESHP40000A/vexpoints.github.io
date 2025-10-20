@@ -11,7 +11,11 @@ let ilength = rheight/2.4;
 const myImage = new Image(iwidth, iwidth);
 myImage.src = 'field.jpeg';
 
+document.body.style.visibility = 'hidden';
+
+// Then after myImage.onload, add:
 myImage.onload = function() {
+  document.body.style.visibility = 'visible';
   updateLayout();
   if (spawnedPoints.length > 0) {
     updateAllCurves();
@@ -4154,4 +4158,5 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
+
 

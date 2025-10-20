@@ -2610,6 +2610,7 @@ function updateLayout() {
   const centerX = rwidth / 2;
   const centerY = rheight / 2;
 
+  // Update myImage size and position
   myImage.style.position = "absolute";
   myImage.style.transition = "all 0.3s ease";
   myImage.style.left = inwidth + "px";
@@ -4170,6 +4171,7 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
+
 
 
 

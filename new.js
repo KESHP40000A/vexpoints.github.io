@@ -2591,10 +2591,10 @@ function updateSidebarLineColor(curveObj, color) {
 }
 
 function updateLayout() {
-  rwidth = window.innerWidth;
-  rheight = window.innerHeight;
-
-  iwidth = Math.min(rwidth / 3.03, rheight / 2.4);
+  let rwidth = window.innerWidth;
+let rheight = window.innerHeight;
+ 
+let iwidth = rwidth/3.03;
   ilength = iwidth;
 
   foot = iwidth / 12;
@@ -4171,6 +4171,7 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
+
 
 
 

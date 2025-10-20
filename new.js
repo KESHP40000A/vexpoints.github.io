@@ -6,16 +6,12 @@
 let rwidth = window.innerWidth;
 let rheight = window.innerHeight;
  
-let iwidth = rwidth/3.03;
-let ilength = rheight/2.4;
+let iwidth = Math.min(rwidth/3.03, rheight/2.4) * 1.6;
+let ilength = iwidth;
 const myImage = new Image(iwidth, iwidth);
 myImage.src = 'field.jpeg';
 
-document.body.style.visibility = 'hidden';
-
-// Then after myImage.onload, add:
 myImage.onload = function() {
-  document.body.style.visibility = 'visible';
   updateLayout();
   if (spawnedPoints.length > 0) {
     updateAllCurves();
@@ -395,7 +391,7 @@ settingsSidebar.innerHTML = `
       <label style="font-size:16px;color:#f0f0f0;">Field Size (in)</label>
       <button id="resetFieldSizeBtn" class="reset-field-btn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+          <path d="M21.6 2v6h-6M2.5 22v-6h6M2 11.6a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
         </svg>
       </button>
     </div>
@@ -460,7 +456,7 @@ settingsSidebar.innerHTML = `
     </div>
     <button id="resetHeadingBtn" class="reset-field-btn">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+        <path d="M21.6 2v6h-6M2.5 22v-6h6M2 11.6a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
       </svg>
     </button>
   </div>
@@ -2294,7 +2290,7 @@ function updateSidebar() {
     refreshIcon.classList.add("refresh-icon");
     refreshIcon.innerHTML = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+        <path d="M21.6 2v6h-6M2.5 22v-6h6M2 11.6a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
       </svg>
     `;
     refreshIcon.style.cursor = "pointer";
@@ -2594,8 +2590,8 @@ function updateLayout() {
   let rwidth = window.innerWidth;
 let rheight = window.innerHeight;
  
-let iwidth = rwidth/3.03;
-  ilength = iwidth;
+let iwidth = Math.min(rwidth/3.03, rheight/2.4) * 1.6;
+let ilength = iwidth;
 
   foot = iwidth / 12;
   finch = foot / 12;
@@ -2610,13 +2606,14 @@ let iwidth = rwidth/3.03;
   const centerX = rwidth / 2;
   const centerY = rheight / 2;
 
-  // Update myImage size and position
   myImage.style.position = "absolute";
   myImage.style.transition = "all 0.3s ease";
   myImage.style.left = inwidth + "px";
   myImage.style.top = inHeight + "px";
   myImage.style.width = iwidth + "px";
   myImage.style.height = iwidth + "px";
+
+  
 
   spawnedImages.forEach((img) => {
     img.style.transition = "all 0.3s ease";
@@ -2630,11 +2627,13 @@ let iwidth = rwidth/3.03;
     img.style.top = (newCenterY - pwidth / 2) + "px";
   });
 
+  updateIconPositions();
   setTimeout(updateAllCurves, 300);
 }
 
 window.addEventListener("resize", () => {
   updateLayout();
+  updateIconPositions();
 
   clearTimeout(window.curveTimeout);
   window.curveTimeout = setTimeout(() => {
@@ -3312,7 +3311,7 @@ function updateRightExtraSidebar() {
     highlighted.style.wordWrap = 'break-word';
     highlighted.style.fontFamily = "'Courier New', monospace";
     highlighted.style.fontSize = '13px';
-    highlighted.style.lineHeight = '1.5';
+    highlighted.style.lineHeight = '1.6';
     highlighted.style.color = 'transparent';
     highlighted.style.background = 'transparent';
     highlighted.style.overflow = 'hidden';
@@ -3577,26 +3576,14 @@ selectBreakFlag = function(flagObj) {
 
 // Initialize all buttons when page loads
 // Find this section and add the new button:
-window.addEventListener("load", () => {
-  // Wait for image to be fully loaded before positioning anything
-  if (myImage.complete) {
-    initializeUI();
-  } else {
-    myImage.onload = initializeUI;
-  }
-});
-
-function initializeUI() {
-  updateLayout(); // Recalculate all positions first
+window.addEventListener('load', () => {
   createRightSidebarButtons();
   createLeftSidebarButtons();
   createCollapseButton();
   createRightCollapseButton();
   createDataSidebar();
-  createRightExtraSidebar();
-  createIcons(); // Create icons after layout is set
-  updateIconPositions(); // Position them correctly
-}
+  createRightExtraSidebar(); // ADD THIS LINE - create it immediately but keep it hidden
+});
 
 // Download functionality
 function downloadState() {
@@ -3993,9 +3980,10 @@ function createIcons() {
 }
 
 function updateIconPositions() {
-  const centerX = rwidth / 2;
-  const centerY = rheight / 2;
-  const iconSize = iwidth * iconSizeRatio;
+  const centerX = window.innerWidth / 2;
+  const centerY = window.innerHeight / 2;
+  const currentIwidth = Math.min(window.innerWidth/3.03, window.innerHeight/2.4) * 1.6;
+  const iconSize = currentIwidth * iconSizeRatio;
 
   // position icons
   [
@@ -4171,8 +4159,3 @@ document.addEventListener("keydown", e => {
 //     }
 //   });
 // });
-
-
-
-
-

@@ -76,6 +76,8 @@ let pointHeadings = new Map(); // Store custom headings for each point
 //   }
 // `;
 
+
+
 // Color schemes configuration
 // Updated color schemes configuration
 let currentColorScheme = 'blue-red';
@@ -238,6 +240,11 @@ let visualizationGroup = null;
 let currentHoveredCurve = null;
 let lineTrackingActive = false;
 let curveMouseMoveHandler = null;
+
+let breakFlags = [];
+let draggingBreakFlag = null;
+let breakFlagOffsetX = 0;
+let breakFlagOffsetY = 0;
 
 window.clickedOnPoint = false;
 
@@ -875,8 +882,303 @@ function clearVisualization() {
   }
 }
 
+
+function createBreakFlag(x, y, attachedTo = null, attachedType = 'line') {
+  const flagSize = pwidth * 0.8;
+  const flag = document.createElement('img');
+  flag.src = 'break-flag.png';
+  flag.className = 'break-flag';
+  flag.style.position = 'absolute';
+  flag.style.width = flagSize + 'px';
+  flag.style.height = flagSize + 'px';
+  flag.style.cursor = 'pointer';
+  flag.style.zIndex = '10';
+  flag.style.opacity = '0.85';
+  flag.style.transition = 'filter 0.2s';
+  flag.draggable = false;
+  
+  document.body.appendChild(flag);
+  
+  const flagObj = {
+    el: flag,
+    attachedTo: attachedTo,
+    attachedType: attachedType,
+    id: 'flag-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    t: 0.5
+  };
+  
+  // Calculate initial t value and position if attached to a line
+  if (attachedType === 'line' && attachedTo && attachedTo.evaluateCurve) {
+    let closestT = 0;
+    let minDist = Infinity;
+    for (let i = 0; i <= 50; i++) {
+      const t = i / 50;
+      const point = attachedTo.evaluateCurve(t);
+      const dist = Math.sqrt((point.x - x) ** 2 + (point.y - y) ** 2);
+      if (dist < minDist) {
+        minDist = dist;
+        closestT = t;
+      }
+    }
+    flagObj.t = closestT;
+    
+    // Position at the calculated point on curve
+    const snapPoint = attachedTo.evaluateCurve(closestT);
+    flag.style.left = (snapPoint.x - flagSize / 2) + 'px';
+    flag.style.top = (snapPoint.y - flagSize) + 'px';
+  } else if (attachedType === 'point' && attachedTo) {
+    // Position at point center
+    const rect = attachedTo.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    flag.style.left = (centerX - flagSize / 2) + 'px';
+    flag.style.top = (centerY - flagSize) + 'px';
+  } else {
+    // Fallback positioning
+    flag.style.left = (x - flagSize / 2) + 'px';
+    flag.style.top = (y - flagSize) + 'px';
+  }
+  
+  // Right-click drag
+  flag.addEventListener('mousedown', (e) => {
+    if (e.button === 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      draggingBreakFlag = flagObj;
+      const rect = flag.getBoundingClientRect();
+      breakFlagOffsetX = e.clientX - rect.left;
+      breakFlagOffsetY = e.clientY - rect.top;
+    }
+  });
+  
+  flag.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+  
+  flag.addEventListener('click', (e) => {
+    e.stopPropagation();
+    selectBreakFlag(flagObj);
+  });
+  
+  breakFlags.push(flagObj);
+  updateSidebar();
+  updateDataSidebar();
+  
+  return flagObj;
+}
+
+document.addEventListener('mousemove', (e) => {
+  if (draggingBreakFlag) {
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+    const flagSize = pwidth * 0.8;
+    const SNAP_THRESHOLD = 30;
+    
+    // Check if over a point first
+    const overPoint = spawnedPoints.find(p => {
+      const rect = p.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const dist = Math.sqrt((mouseX - centerX) ** 2 + (mouseY - centerY) ** 2);
+      return dist < SNAP_THRESHOLD;
+    });
+    
+    if (overPoint) {
+      // Snap to point
+      draggingBreakFlag.attachedTo = overPoint;
+      draggingBreakFlag.attachedType = 'point';
+      const rect = overPoint.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      draggingBreakFlag.el.style.left = (centerX - flagSize / 2) + 'px';
+      draggingBreakFlag.el.style.top = (centerY - flagSize) + 'px';
+      
+      // Store this as last valid position
+      draggingBreakFlag.lastValidAttachment = {
+        attachedTo: overPoint,
+        attachedType: 'point'
+      };
+      
+      return;
+    }
+    
+    // Check if over a line
+    let bestCurve = null;
+    let bestT = 0;
+    let minDist = Infinity;
+    let bestPoint = null;
+    
+    for (const curve of spawnedCurves) {
+      if (!curve.evaluateCurve) continue;
+      
+      for (let i = 0; i <= 50; i++) {
+        const t = i / 50;
+        const point = curve.evaluateCurve(t);
+        const dist = Math.sqrt((point.x - mouseX) ** 2 + (point.y - mouseY) ** 2);
+        if (dist < minDist) {
+          minDist = dist;
+          bestCurve = curve;
+          bestT = t;
+          bestPoint = point;
+        }
+      }
+    }
+    
+    if (minDist < SNAP_THRESHOLD && bestCurve && bestPoint) {
+      // Snap to line
+      draggingBreakFlag.attachedTo = bestCurve;
+      draggingBreakFlag.attachedType = 'line';
+      draggingBreakFlag.t = bestT;
+      draggingBreakFlag.el.style.left = (bestPoint.x - flagSize / 2) + 'px';
+      draggingBreakFlag.el.style.top = (bestPoint.y - flagSize) + 'px';
+      
+      // Store this as last valid position
+      draggingBreakFlag.lastValidAttachment = {
+        attachedTo: bestCurve,
+        attachedType: 'line',
+        t: bestT
+      };
+      
+      return;
+    }
+    
+    // If not near anything, flag stays at its last known valid position
+    // We don't update position at all here
+    return;
+  }
+  
+  // Point dragging logic
+  if (dragging) {
+    dragging.style.left = e.pageX - offsetX + "px";
+    dragging.style.top = e.pageY - offsetY + "px";
+
+    spawnedCurves.forEach(c => {
+      if (c.img1 === dragging || c.img2 === dragging) {
+        c.update();
+      }
+    });
+
+    updateAllCurves();
+    updateCoordFields(dragging);
+    updateDataSidebar();
+  } else if (isDraggingCurve && activeCurve) {
+    activeCurve.update();
+  }
+
+  if (activeCurve && activeCurve.handle) {
+    activeCurve.handle.style.cursor = isDraggingCurve ? "grabbing" : "grab";
+  }
+});
+document.addEventListener('mouseup', (e) => {
+  if (draggingBreakFlag && e.button === 2) {
+    // If we have a last valid attachment, ensure it's restored
+    if (draggingBreakFlag.lastValidAttachment) {
+      draggingBreakFlag.attachedTo = draggingBreakFlag.lastValidAttachment.attachedTo;
+      draggingBreakFlag.attachedType = draggingBreakFlag.lastValidAttachment.attachedType;
+      if (draggingBreakFlag.lastValidAttachment.t !== undefined) {
+        draggingBreakFlag.t = draggingBreakFlag.lastValidAttachment.t;
+      }
+      delete draggingBreakFlag.lastValidAttachment;
+    }
+    
+    updateBreakFlagPositions();
+    updateSidebar();
+    updateDataSidebar();
+    draggingBreakFlag = null;
+    return;
+  }
+  
+  if (dragging) {
+    updateAllCurves();
+    updateCoordFields(dragging);
+
+    dragging = null;
+    isDragging = false;
+    window.clickedOnPoint = false;
+    window.ignoreNextClick = false;
+
+    spawnedCurves.forEach(c => {
+      if (c.handle && !(isDraggingCurve && activeCurve === c)) {
+        c.handle.style.opacity = "0";
+      }
+    });
+  }
+});
+
+// function updateBreakFlagAttachment(flagObj, mouseX, mouseY) {
+//   // Check if over a point first (higher priority)
+//   const overPoint = spawnedPoints.find(p => {
+//     const rect = p.getBoundingClientRect();
+//     const threshold = 30;
+//     const centerX = rect.left + rect.width / 2;
+//     const centerY = rect.top + rect.height / 2;
+//     const dist = Math.sqrt((mouseX - centerX) ** 2 + (mouseY - centerY) ** 2);
+//     return dist < threshold;
+//   });
+  
+//   if (overPoint) {
+//     flagObj.attachedTo = overPoint;
+//     flagObj.attachedType = 'point';
+//     return;
+//   }
+  
+//   // Check if over a line
+//   let bestCurve = null;
+//   let bestT = 0;
+//   let minDist = Infinity;
+  
+//   for (const curve of spawnedCurves) {
+//     if (!curve.evaluateCurve) continue;
+    
+//     for (let i = 0; i <= 50; i++) {
+//       const t = i / 50;
+//       const point = curve.evaluateCurve(t);
+//       const dist = Math.sqrt((point.x - mouseX) ** 2 + (point.y - mouseY) ** 2);
+//       if (dist < minDist) {
+//         minDist = dist;
+//         bestCurve = curve;
+//         bestT = t;
+//       }
+//     }
+//   }
+  
+//   if (minDist < 30 && bestCurve) {
+//     flagObj.attachedTo = bestCurve;
+//     flagObj.attachedType = 'line';
+//     flagObj.t = bestT;
+//   }
+// }
+
+
+// Instead of trying to override, just update selectBreakFlag directly in its definition
+// Find the selectBreakFlag function and add this at the end:
+function selectBreakFlag(flagObj) {
+  // Deselect all other break flags
+  breakFlags.forEach(f => {
+    f.el.style.filter = '';
+  });
+  
+  // Deselect points and lines
+  if (selectedPoint) {
+    selectedPoint.style.outline = '';
+    selectedPoint = null;
+  }
+  resetLineStyles();
+  
+  // Select this flag with glow
+  flagObj.el.style.filter = 'drop-shadow(0 0 8px rgba(255,255,255,0.9))';
+  
+  // Update sidebar to show selection
+  updateSidebar();
+  
+  // ADD THIS LINE:
+  updateRightExtraSidebar();
+}
 // Replace the createCurve function with this corrected version
 // This goes after the clearVisualization function and before connectLastTwo
+
+
+
 
 function createCurve(img1, img2) {
   const circleGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -1077,7 +1379,15 @@ function createCurve(img1, img2) {
       circle.style.pointerEvents = "auto";
       circle.style.cursor = "pointer";
       
+
+      
       circleGroup.appendChild(circle);
+
+      circle.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  createBreakFlag(e.clientX, e.clientY, curveObj, 'line');
+});
     }
 
     for (let i = 0; i < numHandles; i++) {
@@ -1122,6 +1432,15 @@ handle.addEventListener("mouseleave", (e) => {
     hideHandles();
   }
 });
+
+// Add right-click handler to circles for break flag creation
+// circleGroup.addEventListener('contextmenu', (e) => {
+//   e.preventDefault();
+//   e.stopPropagation();
+//   const mouseX = e.clientX;
+//   const mouseY = e.clientY;
+//   createBreakFlag(mouseX, mouseY, curveObj, 'line');
+// });
     handle.addEventListener("mousedown", (e) => {
         e.stopPropagation();
         e.preventDefault();
@@ -1141,6 +1460,8 @@ handle.addEventListener("mouseleave", (e) => {
     curveObj.color = avgColor;
     curveObj.maxDistance = totalLength;
     updateSidebarLineColor(curveObj, avgColor);
+      updateBreakFlagPositions();
+
   }
 
   function showHandles() {
@@ -1223,6 +1544,13 @@ handle.addEventListener("mouseleave", (e) => {
     const [x2, y2] = getCenter(curveObj.img2);
     hitboxPath.setAttribute("d", `M ${x1} ${y1} L ${x2} ${y2}`);
   };
+
+  hitboxPath.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  // Use mouse position for line flags
+  createBreakFlag(e.clientX, e.clientY, curveObj, 'line');
+});
   
   hitboxPath.addEventListener("mouseenter", () => {
     showHandles();
@@ -1309,8 +1637,27 @@ handle.addEventListener("mouseleave", (e) => {
 
 function updateAllCurves() {
   spawnedCurves.forEach((c) => c.update());
+  updateBreakFlagPositions(); // ADD THIS LINE
   updateSidebar();
   updateDataSidebar();
+}
+
+function updateBreakFlagPositions() {
+  const flagSize = pwidth * 0.8;
+  
+  breakFlags.forEach(flagObj => {
+    if (flagObj.attachedType === 'point' && flagObj.attachedTo) {
+      const rect = flagObj.attachedTo.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      flagObj.el.style.left = (centerX - flagSize / 2) + 'px';
+      flagObj.el.style.top = (centerY - flagSize) + 'px';  // Changed
+    } else if (flagObj.attachedType === 'line' && flagObj.attachedTo && flagObj.attachedTo.evaluateCurve) {
+      const point = flagObj.attachedTo.evaluateCurve(flagObj.t);
+      flagObj.el.style.left = (point.x - flagSize / 2) + 'px';
+      flagObj.el.style.top = (point.y - flagSize) + 'px';  // Changed
+    }
+  });
 }
 
 function connectLastTwo(img1 = null, img2 = null) {
@@ -1325,7 +1672,8 @@ function connectLastTwo(img1 = null, img2 = null) {
 }
 
 function clicked(event) {
-  if (event.target.closest("#sidebar")) return;
+  // Check if click is on any sidebar
+  if (event.target.closest("#sidebar") || event.target.closest("#dataSidebar") || event.target.closest("#settingsSidebar") || event.target.closest(".right-extra-sidebar")) return;
 
   const mouseX = event.pageX;
   const mouseY = event.pageY;
@@ -1389,6 +1737,15 @@ function clicked(event) {
       }
     });
 
+    image2.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = image2.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      createBreakFlag(centerX, centerY, image2, 'point');
+    });
+
     image2.addEventListener("click", (e) => {
       e.stopPropagation();
 
@@ -1448,6 +1805,8 @@ document.addEventListener("click", function (e) {
 });
 
 document.addEventListener("mousedown", function(e) {
+  if (e.button !== 0) return; // Only left click for points
+  
   const clickedPoint = spawnedPoints.find(p => {
     const rect = p.getBoundingClientRect();
     return (
@@ -1475,6 +1834,19 @@ document.addEventListener("mousedown", function(e) {
 });
 
 document.addEventListener("mousemove", function (e) {
+  if (draggingBreakFlag) {
+    const flag = draggingBreakFlag.el;
+    const newX = e.clientX - breakFlagOffsetX;
+    const newY = e.clientY - breakFlagOffsetY;
+    flag.style.left = newX + 'px';
+    flag.style.top = newY + 'px';
+    
+    const centerX = e.clientX;
+    const centerY = e.clientY;
+    updateBreakFlagAttachment(draggingBreakFlag, centerX, centerY);
+    return; // Stop here, don't process point dragging
+  }
+  
   if (dragging) {
     dragging.style.left = e.pageX - offsetX + "px";
     dragging.style.top = e.pageY - offsetY + "px";
@@ -1498,6 +1870,11 @@ document.addEventListener("mousemove", function (e) {
 });
 
 document.addEventListener("mouseup", function (e) {
+ if (draggingBreakFlag && e.button === 2) {
+    draggingBreakFlag = null;
+    return;
+  }
+  
   if (dragging) {
     updateAllCurves();
     updateCoordFields(dragging);
@@ -1517,16 +1894,19 @@ document.addEventListener("mouseup", function (e) {
 
 document.addEventListener("keydown", (e) => {
   // Check if the user is focused on an input field
-  const isInputFocused = e.target.tagName === "INPUT" && 
-                        (e.target.id === "coordX" || 
-                         e.target.id === "coordY" || 
-                         e.target.id === "drivebaseL" || 
-                         e.target.id === "drivebaseW" || 
-                         e.target.id === "robotSizeL" || 
-                         e.target.id === "robotSizeW" ||
-                         e.target.id === "fieldSizeL" ||
-                         e.targer.id == "headingTheta" ||
-                         e.target.id === "fieldSizeW");
+    const isInputFocused = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA";
+
+
+  // Check if a break flag is selected (has glow filter)
+  const selectedFlag = breakFlags.find(f => f.el.style.filter.includes('drop-shadow'));
+  if (selectedFlag && (e.key === "Backspace" || e.key === "Delete") && !isInputFocused) {
+    e.preventDefault();
+    selectedFlag.el.remove();
+    breakFlags = breakFlags.filter(f => f !== selectedFlag);
+    updateSidebar();
+    updateDataSidebar();
+    return;
+  }
   
   // Only delete selected point if NOT in an input field
   if ((e.key === "Backspace" || e.key === "Delete") && selectedPoint && !isInputFocused) {
@@ -1534,13 +1914,96 @@ document.addEventListener("keydown", (e) => {
 
     const deletedIndex = spawnedPoints.indexOf(selectedPoint);
 
+    // Collect ALL flags that need to be reassigned to the new merged curve
+    const flagsToReassign = [];
+    
+    const prevPoint = spawnedPoints[deletedIndex - 1];
+    const nextPoint = spawnedPoints[deletedIndex + 1];
+    
+    // Find curves before and after the deleted point
+    const curveBeforeDeleted = spawnedCurves.find(c => 
+      (c.img1 === prevPoint && c.img2 === selectedPoint) ||
+      (c.img2 === prevPoint && c.img1 === selectedPoint)
+    );
+    const curveAfterDeleted = spawnedCurves.find(c => 
+      (c.img1 === selectedPoint && c.img2 === nextPoint) ||
+      (c.img2 === selectedPoint && c.img1 === nextPoint)
+    );
+
+    // Get lengths of old curves for ratio calculation
+    let lengthBefore = 0;
+    let lengthAfter = 0;
+    
+    if (curveBeforeDeleted && curveBeforeDeleted.allPoints) {
+      // Calculate curve length
+      for (let i = 1; i <= 100; i++) {
+        const t1 = (i - 1) / 100;
+        const t2 = i / 100;
+        const p1 = curveBeforeDeleted.evaluateCurve(t1);
+        const p2 = curveBeforeDeleted.evaluateCurve(t2);
+        lengthBefore += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+      }
+    }
+    
+    if (curveAfterDeleted && curveAfterDeleted.allPoints) {
+      for (let i = 1; i <= 100; i++) {
+        const t1 = (i - 1) / 100;
+        const t2 = i / 100;
+        const p1 = curveAfterDeleted.evaluateCurve(t1);
+        const p2 = curveAfterDeleted.evaluateCurve(t2);
+        lengthAfter += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+      }
+    }
+    
+    const totalOldLength = lengthBefore + lengthAfter;
+
+    // Collect flags from curve BEFORE deleted point
+    if (curveBeforeDeleted) {
+      const flagsOnPrevCurve = breakFlags.filter(f => 
+        f.attachedType === 'line' && f.attachedTo === curveBeforeDeleted
+      );
+      flagsOnPrevCurve.forEach(flag => {
+        // Calculate distance along the old "before" curve
+        const distanceAlongBefore = flag.t * lengthBefore;
+        // New t is this distance as a fraction of total new curve length
+        const newT = totalOldLength > 0 ? distanceAlongBefore / totalOldLength : flag.t;
+        flagsToReassign.push({ flag, newT });
+      });
+    }
+
+    // Collect flags from curve AFTER deleted point
+    if (curveAfterDeleted) {
+      const flagsOnNextCurve = breakFlags.filter(f => 
+        f.attachedType === 'line' && f.attachedTo === curveAfterDeleted
+      );
+      flagsOnNextCurve.forEach(flag => {
+        // Distance along after curve, then add the entire before length
+        const distanceAlongAfter = flag.t * lengthAfter;
+        const totalDistance = lengthBefore + distanceAlongAfter;
+        const newT = totalOldLength > 0 ? totalDistance / totalOldLength : flag.t;
+        flagsToReassign.push({ flag, newT });
+      });
+    }
+
+    // Delete ONLY flags attached directly to the point
+    const flagsToDelete = breakFlags.filter(f => 
+  f.attachedType === 'point' && f.attachedTo === selectedPoint
+);
+
+flagsToDelete.forEach(flag => flag.el.remove());
+breakFlags = breakFlags.filter(f => !flagsToDelete.includes(f));
+
+    // Remove the point itself
     selectedPoint.remove();
 
+    // Remove all curves connected to this point
     spawnedCurves.forEach((c) => {
       if (c.img1 === selectedPoint || c.img2 === selectedPoint) {
         if (c.circleGroup) c.circleGroup.remove();
         if (c.handleGroup) c.handleGroup.remove();
         if (c.handle) c.handle.remove();
+        if (c.hitboxPath) c.hitboxPath.remove();
+        if (c.vizGroup) c.vizGroup.remove();
       }
     });
 
@@ -1549,24 +2012,30 @@ document.addEventListener("keydown", (e) => {
     );
     spawnedPoints = spawnedPoints.filter((p) => p !== selectedPoint);
 
-    isDragging = false;
-    dragging = null;
-    isDraggingCurve = false;
-    activeCurve = null;
-    window.ignoreNextClick = false;
-
-    const prevPoint = spawnedPoints[deletedIndex - 1];
-    const nextPoint = spawnedPoints[deletedIndex];
+    // Connect previous and next point if they exist
+    let newCurve = null;
     if (prevPoint && nextPoint) {
-      connectLastTwo(prevPoint, nextPoint);
+      newCurve = createCurve(prevPoint, nextPoint);
+      
+      // Reassign all flags to new curve with calculated t values
+      flagsToReassign.forEach(({ flag, newT }) => {
+        flag.attachedTo = newCurve;
+        flag.t = Math.max(0, Math.min(1, newT)); // Clamp between 0 and 1
+      });
     }
 
+    // Update point colors
     spawnedPoints.forEach((p, i) => {
       p.src = imageSet[i % imageSet.length];
     });
 
     selectedPoint = null;
+    isDragging = false;
+    dragging = null;
+    
     updateSidebar();
+    updateDataSidebar();
+    updateBreakFlagPositions();
   }
 });
 
@@ -1614,6 +2083,50 @@ sidebar.addEventListener('drop', (e) => {
     .map(item => parseInt(item.dataset.index, 10));
 
   const reorderedPoints = newOrder.map(i => spawnedPoints[i]);
+  
+  // Store flag data with their ORIGINAL information
+  const flagData = breakFlags.map(flag => {
+    if (flag.attachedType === 'point' && flag.attachedTo) {
+      const oldIndex = spawnedPoints.indexOf(flag.attachedTo);
+      return {
+        flag: flag,
+        type: 'point',
+        pointIndex: oldIndex,
+        t: flag.t
+      };
+    } else if (flag.attachedType === 'line' && flag.attachedTo) {
+      const oldImg1Index = spawnedPoints.indexOf(flag.attachedTo.img1);
+      const oldImg2Index = spawnedPoints.indexOf(flag.attachedTo.img2);
+      
+      // Determine which point the flag "belongs to" (the first point of the curve)
+      const ownerPointIndex = Math.min(oldImg1Index, oldImg2Index);
+      
+      // Calculate the curve length for proportional repositioning
+      let curveLength = 0;
+      if (flag.attachedTo.evaluateCurve) {
+        for (let i = 1; i <= 100; i++) {
+          const t1 = (i - 1) / 100;
+          const t2 = i / 100;
+          const p1 = flag.attachedTo.evaluateCurve(t1);
+          const p2 = flag.attachedTo.evaluateCurve(t2);
+          curveLength += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+        }
+      }
+      
+      // Calculate absolute distance along curve
+      const distanceAlongCurve = flag.t * curveLength;
+      
+      return {
+        flag: flag,
+        type: 'line',
+        ownerPointIndex: ownerPointIndex, // Which point this flag follows
+        t: flag.t,
+        distanceAlongCurve: distanceAlongCurve
+      };
+    }
+    return null;
+  }).filter(d => d !== null);
+  
   spawnedPoints = reorderedPoints.slice();
   spawnedImages = spawnedPoints.slice();
 
@@ -1621,7 +2134,9 @@ sidebar.addEventListener('drop', (e) => {
   spawnedCurves.forEach(c => {
     if (c.circleGroup) c.circleGroup.remove();
     if (c.handleGroup) c.handleGroup.remove();
-    if (c.handle) c.handle.remove(); // Legacy support
+    if (c.handle) c.handle.remove();
+    if (c.hitboxPath) c.hitboxPath.remove();
+    if (c.vizGroup) c.vizGroup.remove();
   });
   spawnedCurves = [];
 
@@ -1630,6 +2145,82 @@ sidebar.addEventListener('drop', (e) => {
     createCurve(spawnedPoints[i], spawnedPoints[i + 1]);
   }
 
+  // Reassign flags intelligently
+  flagData.forEach(data => {
+    if (data.type === 'point') {
+      // Point flags: follow the point to its new position
+      const newIndex = newOrder.indexOf(data.pointIndex);
+      if (newIndex !== -1 && newIndex < spawnedPoints.length) {
+        data.flag.attachedTo = spawnedPoints[newIndex];
+        data.flag.attachedType = 'point';
+      }
+    } else if (data.type === 'line') {
+      // Line flags: follow the "owner" point (the point they were after in the original order)
+      // Find where the owner point ended up
+      const ownerNewIndex = newOrder.indexOf(data.ownerPointIndex);
+      
+      if (ownerNewIndex !== -1 && ownerNewIndex < spawnedPoints.length - 1) {
+        // Find the curve that NOW starts from the owner point's new position
+        const newCurve = spawnedCurves.find(c => {
+          const c1Index = spawnedPoints.indexOf(c.img1);
+          return c1Index === ownerNewIndex;
+        });
+        
+        if (newCurve && newCurve.evaluateCurve) {
+          data.flag.attachedTo = newCurve;
+          data.flag.attachedType = 'line';
+          
+          // Calculate new curve length
+          let newCurveLength = 0;
+          for (let i = 1; i <= 100; i++) {
+            const t1 = (i - 1) / 100;
+            const t2 = i / 100;
+            const p1 = newCurve.evaluateCurve(t1);
+            const p2 = newCurve.evaluateCurve(t2);
+            newCurveLength += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+          }
+          
+          // Maintain the same absolute distance ratio
+          if (newCurveLength > 0) {
+            data.flag.t = Math.max(0, Math.min(1, data.distanceAlongCurve / newCurveLength));
+          } else {
+            data.flag.t = 0.5; // Fallback to middle
+          }
+        }
+      } else if (ownerNewIndex === spawnedPoints.length - 1) {
+        // The owner point is now the LAST point, so there's no curve after it
+        // Attach to the curve BEFORE it instead
+        if (ownerNewIndex > 0) {
+          const newCurve = spawnedCurves.find(c => {
+            const c2Index = spawnedPoints.indexOf(c.img2);
+            return c2Index === ownerNewIndex;
+          });
+          
+          if (newCurve && newCurve.evaluateCurve) {
+            data.flag.attachedTo = newCurve;
+            data.flag.attachedType = 'line';
+            
+            // Calculate new curve length
+            let newCurveLength = 0;
+            for (let i = 1; i <= 100; i++) {
+              const t1 = (i - 1) / 100;
+              const t2 = i / 100;
+              const p1 = newCurve.evaluateCurve(t1);
+              const p2 = newCurve.evaluateCurve(t2);
+              newCurveLength += Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+            }
+            
+            if (newCurveLength > 0) {
+              data.flag.t = Math.max(0, Math.min(1, data.distanceAlongCurve / newCurveLength));
+            } else {
+              data.flag.t = 0.5;
+            }
+          }
+        }
+      }
+    }
+  });
+
   // Update colors
   spawnedPoints.forEach((p, i) => {
     p.src = imageSet[i % imageSet.length];
@@ -1637,6 +2228,7 @@ sidebar.addEventListener('drop', (e) => {
 
   updateSidebar();
   updateAllCurves();
+  updateBreakFlagPositions();
 });
 
 function getDragAfterElement(container, y) {
@@ -1682,13 +2274,11 @@ function updateSidebar() {
     left.appendChild(colorDot);
     left.appendChild(label);
 
-    // Right side container for refresh and queue icons
     const rightContainer = document.createElement("div");
     rightContainer.style.display = "flex";
     rightContainer.style.alignItems = "center";
     rightContainer.style.gap = "8px";
 
-    // Refresh icon (initially hidden)
     const refreshIcon = document.createElement("div");
     refreshIcon.classList.add("refresh-icon");
     refreshIcon.innerHTML = `
@@ -1703,7 +2293,6 @@ function updateSidebar() {
     refreshIcon.style.alignItems = "center";
     refreshIcon.style.color = p.isAtZero ? "#2196f3" : "white";
 
-    // Store original position if not already stored
     if (!pointOriginalPositions.has(p)) {
       const rect = p.getBoundingClientRect();
       pointOriginalPositions.set(p, {
@@ -1717,7 +2306,6 @@ function updateSidebar() {
       togglePointZero(p, idx);
     });
 
-    // Show/hide refresh icon on hover
     pointItem.addEventListener("mouseenter", () => {
       refreshIcon.style.opacity = "1";
     });
@@ -1752,12 +2340,53 @@ function updateSidebar() {
 
     pointItem.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (e.target.closest('.refresh-icon')) return;
       selectPoint(p);
       updateCoordFields(p);
     });
 
     sidebar.appendChild(pointItem);
 
+    // Add ALL flags attached to this point (regardless of line position)
+    const pointFlags = breakFlags.filter(f => f.attachedType === 'point' && f.attachedTo === p);
+    pointFlags.forEach(flag => {
+      const flagItem = document.createElement('div');
+      flagItem.classList.add('flag-item');
+      flagItem.style.padding = '4px 8px';
+      flagItem.style.paddingLeft = '24px';
+      flagItem.style.display = 'flex';
+      flagItem.style.alignItems = 'center';
+      flagItem.style.gap = '6px';
+      flagItem.style.cursor = 'pointer';
+      
+      const isSelected = flag.el.style.filter.includes('drop-shadow');
+      if (isSelected) {
+        flagItem.style.background = 'rgba(255, 255, 255, 0.15)';
+      }
+
+      const flagIcon = document.createElement('img');
+      flagIcon.src = 'break-flag.png';
+      flagIcon.style.width = '16px';
+      flagIcon.style.height = '16px';
+      
+      const flagLabel = document.createElement('span');
+      flagLabel.textContent = 'Break';
+      flagLabel.style.fontSize = '14px';
+      flagLabel.style.color = '#ccc';
+      
+      flagItem.appendChild(flagIcon);
+      flagItem.appendChild(flagLabel);
+      
+      flagItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectBreakFlag(flag);
+        flag.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      
+      sidebar.appendChild(flagItem);
+    });
+
+    // Now add the line (if exists)
     const nextPoint = spawnedPoints[idx + 1];
     if (!nextPoint) return;
 
@@ -1790,8 +2419,48 @@ function updateSidebar() {
       });
 
       sidebar.appendChild(lineItem);
+
+      // Add flags attached to this LINE only
+      const lineFlags = breakFlags.filter(f => f.attachedType === 'line' && f.attachedTo === line);
+      lineFlags.forEach(flag => {
+        const flagItem = document.createElement('div');
+        flagItem.classList.add('flag-item');
+        flagItem.style.padding = '4px 8px';
+        flagItem.style.paddingLeft = '24px';
+        flagItem.style.display = 'flex';
+        flagItem.style.alignItems = 'center';
+        flagItem.style.gap = '6px';
+        flagItem.style.cursor = 'pointer';
+        
+        const isSelected = flag.el.style.filter.includes('drop-shadow');
+        if (isSelected) {
+          flagItem.style.background = 'rgba(255, 255, 255, 0.15)';
+        }
+
+        const flagIcon = document.createElement('img');
+        flagIcon.src = 'break-flag.png';
+        flagIcon.style.width = '16px';
+        flagIcon.style.height = '16px';
+        
+        const flagLabel = document.createElement('span');
+        flagLabel.textContent = 'Break';
+        flagLabel.style.fontSize = '14px';
+        flagLabel.style.color = '#ccc';
+        
+        flagItem.appendChild(flagIcon);
+        flagItem.appendChild(flagLabel);
+        
+        flagItem.addEventListener('click', (e) => {
+          e.stopPropagation();
+          selectBreakFlag(flag);
+          flag.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+        
+        sidebar.appendChild(flagItem);
+      });
     }
   });
+
   updateDataSidebar();
 }
 
@@ -1852,6 +2521,11 @@ function resetLineStyles() {
 function selectLine(line) {
   resetLineStyles();
 
+  // Deselect all break flags
+  breakFlags.forEach(f => {
+    f.el.style.filter = '';
+  });
+
   if (selectedPoint) {
     selectedPoint.style.outline = "";
     selectedPoint = null;
@@ -1876,6 +2550,12 @@ function selectLine(line) {
 
 function selectPoint(point) {
   resetLineStyles();
+  
+  // Deselect all break flags
+  breakFlags.forEach(f => {
+    f.el.style.filter = '';
+  });
+  
   selectedPoint = point;
   updateSidebar();
 
@@ -1968,6 +2648,15 @@ function createRightSidebarButtons() {
     </svg>
   `;
   
+  // ADD THIS: Upload event listener
+  uploadBtn.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.txt';
+    input.addEventListener('change', uploadState);
+    input.click();
+  });
+  
   // Download icon
   const downloadBtn = document.createElement('button');
   downloadBtn.className = 'sidebar-button';
@@ -1978,6 +2667,9 @@ function createRightSidebarButtons() {
       <line x1="12" y1="15" x2="12" y2="3"></line>
     </svg>
   `;
+  
+  // ADD THIS: Download event listener
+  downloadBtn.addEventListener('click', downloadState);
   
   // Delete/Trash icon
   const deleteBtn = document.createElement('button');
@@ -1990,6 +2682,13 @@ function createRightSidebarButtons() {
       <line x1="14" y1="11" x2="14" y2="17"></line>
     </svg>
   `;
+  
+  // ADD THIS: Delete event listener (optional - clears all)
+  deleteBtn.addEventListener('click', () => {
+    if (confirm('Are you sure you want to clear all points and settings?')) {
+      clearAll();
+    }
+  });
   
   // Question icon
   const questionBtn = document.createElement('button');
@@ -2159,7 +2858,7 @@ function updateDataSidebar() {
   dataSidebar.innerHTML = '<h3>Data</h3>';
   
   spawnedPoints.forEach((p, idx) => {
-    // Add point coordinates - NO LABEL, just coords
+    // Add point coordinates
     const pointData = document.createElement('div');
     pointData.className = 'data-item point-data';
     
@@ -2199,29 +2898,61 @@ function updateDataSidebar() {
     
     // Convert to current unit
     const conversion = unitConversions[currentUnit];
-    const unitLabel = unitLabels[currentUnit];
     
-    // No label - just coordinates
     // Calculate heading for display
-let heading;
-if (pointHeadings.has(p)) {
-  heading = pointHeadings.get(p);
-} else {
-  heading = calculateNaturalHeading(p);
-}
+    let heading;
+    if (pointHeadings.has(p)) {
+      heading = pointHeadings.get(p);
+    } else {
+      heading = calculateNaturalHeading(p);
+    }
 
-// No label - just coordinates with heading in green
-pointData.innerHTML = `
-  <span class="coord-display">
-    <span class="x-coord">X: ${(xIn * conversion).toFixed(2)}</span>, 
-    <span class="y-coord">Y: ${(yIn * conversion).toFixed(2)}</span>
-    <span style="color: #4CAF50;"> (${Math.round(heading)}°)</span>
-  </span>
-`;
+    // Point coordinates
+    pointData.innerHTML = `
+      <span class="coord-display">
+        <span class="x-coord">X: ${(xIn * conversion).toFixed(2)}</span>, 
+        <span class="y-coord">Y: ${(yIn * conversion).toFixed(2)}</span>
+        <span style="color: #4CAF50;"> (${Math.round(heading)}°)</span>
+      </span>
+    `;
     
     dataSidebar.appendChild(pointData);
     
-    // Add line data if there's a next point - NO LABEL
+    // Add break flags attached to this SPECIFIC point
+    const pointFlags = breakFlags.filter(f => f.attachedType === 'point' && f.attachedTo === p);
+    pointFlags.forEach(flag => {
+      const flagData = document.createElement('div');
+      flagData.className = 'data-item line-data';
+      
+      // Get timeout value
+      const timeout = breakFlagData.has(flag.id) ? breakFlagData.get(flag.id).timeout : 0;
+      
+      // Calculate heading for this flag
+      let flagHeading = 0;
+      const flagIndex = spawnedPoints.indexOf(p);
+      if (flagIndex < spawnedPoints.length - 1) {
+        const nextPoint = spawnedPoints[flagIndex + 1];
+        const [x1, y1] = getCenter(p);
+        const [x2, y2] = getCenter(nextPoint);
+        const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+        flagHeading = (90 + angle + 360) % 360;
+      }
+      
+      // Use the point's coordinates since flag is at the point
+    flagData.innerHTML = `
+  <span class="length-display">
+    (<span class="x-coord">${(xIn * conversion).toFixed(2)}</span>, 
+    <span class="y-coord">${(yIn * conversion).toFixed(2)}</span>, 
+    <span style="color: #4CAF50;">${Math.round(flagHeading)}°</span>,
+    <span class="delay-value"> ${timeout}</span>)
+  </span>
+`;
+
+      
+      dataSidebar.appendChild(flagData);
+    });
+    
+    // Add line data if there's a next point
     const nextPoint = spawnedPoints[idx + 1];
     if (nextPoint) {
       const lineData = document.createElement('div');
@@ -2231,24 +2962,17 @@ pointData.innerHTML = `
       const nextCenterX = nextRect.left + nextRect.width / 2;
       const nextCenterY = nextRect.top + nextRect.height / 2;
       
-      // Calculate distances in pixels
+      // Calculate distances
       const dxPx = nextCenterX - pointCenterX;
       const dyPx = nextCenterY - pointCenterY;
-      
-      // Convert to inches
-      // Convert to inches
       const dxIn = Math.abs(dxPx / inch);
       const dyIn = Math.abs(dyPx / inch);
       const totalLength = Math.sqrt(dxIn * dxIn + dyIn * dyIn);
       
-      // Convert to current unit
-      const conversion = unitConversions[currentUnit];
-      const unitLabel = unitLabels[currentUnit];
       const dxConverted = dxIn * conversion;
       const dyConverted = dyIn * conversion;
       const totalConverted = totalLength * conversion;
       
-      // No label - just length data
       lineData.innerHTML = `
         <span class="length-display">
           ${totalConverted.toFixed(2)}
@@ -2258,6 +2982,67 @@ pointData.innerHTML = `
       `;
       
       dataSidebar.appendChild(lineData);
+      
+      // Add break flags on THIS SPECIFIC line
+      const curve = spawnedCurves.find(c => 
+        (c.img1 === p && c.img2 === nextPoint) || 
+        (c.img2 === p && c.img1 === nextPoint)
+      );
+      
+      if (curve) {
+        const lineFlags = breakFlags.filter(f => f.attachedType === 'line' && f.attachedTo === curve);
+        lineFlags.forEach(flag => {
+          const flagData = document.createElement('div');
+          flagData.className = 'data-item line-data';
+          
+          // Get timeout value
+          const timeout = breakFlagData.has(flag.id) ? breakFlagData.get(flag.id).timeout : 0;
+          
+          // Calculate position at t along curve
+          const point = curve.evaluateCurve(flag.t);
+          
+          // Convert to field coordinates
+          let flagXIn, flagYIn;
+          let referencePoint = null;
+          for (let j = idx - 1; j >= 0; j--) {
+            if (spawnedPoints[j].isAtZero) {
+              referencePoint = spawnedPoints[j];
+              break;
+            }
+          }
+          
+          if (referencePoint) {
+            const refRect = referencePoint.getBoundingClientRect();
+            const baseX = refRect.left + refRect.width / 2;
+            const baseY = refRect.top + refRect.height / 2;
+            flagXIn = (point.x - baseX) / inch;
+            flagYIn = (point.y - baseY) / inch;
+          } else {
+            const screenCenterX = window.innerWidth / 2;
+            const screenCenterY = window.innerHeight / 2;
+            flagXIn = (point.x - screenCenterX) / inch;
+            flagYIn = (point.y - screenCenterY) / inch;
+          }
+          
+          flagYIn *= -1;
+          
+          // Calculate heading from tangent
+          const tangent = getBezierTangentGlobal(flag.t, curve.allPoints);
+          const angle = Math.atan2(tangent.dy, tangent.dx) * 180 / Math.PI;
+          const flagHeading = (90 - angle + 360) % 360;
+          
+          flagData.innerHTML = `
+  <span class="length-display">
+    (<span class="x-coord">${(flagXIn * conversion).toFixed(2)}</span>, 
+    <span class="y-coord">${(flagYIn * conversion).toFixed(2)}</span>, 
+    <span style="color: #4CAF50;">${Math.round(flagHeading)}°</span>,
+    <span class="delay-value"> ${timeout}</span>)
+  </span>
+`;
+          
+          dataSidebar.appendChild(flagData);
+        });
+      }
     }
   });
 }
@@ -2369,13 +3154,672 @@ function flipAllPointsAcrossXAxis() {
   updateDataSidebar();
 }
 
+// Store timeout and custom code data for break flags
+let breakFlagData = new Map(); // Map to store timeout and custom code for each flag
+
+// Create right collapse button
+function createRightCollapseButton() {
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'collapse-button-right';
+  collapseBtn.innerHTML = `
+    <svg viewBox="0 0 24 24">
+      <polyline points="15 18 9 12 15 6"></polyline>
+    </svg>
+  `;
+  
+  collapseBtn.addEventListener('click', toggleRightExtraSidebar);
+  
+  document.body.appendChild(collapseBtn);
+}
+
+let rightExtraSidebarOpen = false;
+
+function toggleRightExtraSidebar() {
+  rightExtraSidebarOpen = !rightExtraSidebarOpen;
+  const extraSidebar = document.getElementById('rightExtraSidebar');
+  const collapseBtn = document.querySelector('.collapse-button-right');
+  const rightButtons = document.querySelector('.sidebar-buttons.right');
+  
+  if (rightExtraSidebarOpen) {
+    // Open the extra sidebar
+    if (!extraSidebar) {
+      createRightExtraSidebar();
+    } else {
+      extraSidebar.style.display = 'block';
+    }
+    
+    // Move buttons to the left
+    rightButtons.style.right = '470px'; // 220px (settings) + 250px (extra) = 470px
+    collapseBtn.style.right = '470px';
+    
+    // Change arrow to point right
+    collapseBtn.innerHTML = `
+      <svg viewBox="0 0 24 24">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    `;
+    
+    updateRightExtraSidebar();
+  } else {
+    // Close the extra sidebar
+    if (extraSidebar) {
+      extraSidebar.style.display = 'none';
+    }
+    
+    // Move buttons back
+    rightButtons.style.right = '220px';
+    collapseBtn.style.right = '220px';
+    
+    // Change arrow to point left
+    collapseBtn.innerHTML = `
+      <svg viewBox="0 0 24 24">
+        <polyline points="15 18 9 12 15 6"></polyline>
+      </svg>
+    `;
+  }
+}
+
+function createRightExtraSidebar() {
+  const extraSidebar = document.createElement('div');
+  extraSidebar.id = 'rightExtraSidebar';
+  extraSidebar.className = 'right-extra-sidebar';
+  extraSidebar.innerHTML = '<h3>Properties</h3>';
+  document.body.appendChild(extraSidebar);
+  updateRightExtraSidebar();
+}
+
+function updateRightExtraSidebar() {
+  const extraSidebar = document.getElementById('rightExtraSidebar');
+  if (!extraSidebar || extraSidebar.style.display === 'none') return;
+  
+  extraSidebar.innerHTML = '<h3>Properties</h3>';
+  
+  // Check if a break flag is selected
+  const selectedFlag = breakFlags.find(f => f.el.style.filter.includes('drop-shadow'));
+  
+  if (selectedFlag) {
+    // Get or initialize data for this flag
+    if (!breakFlagData.has(selectedFlag.id)) {
+      breakFlagData.set(selectedFlag.id, {
+        timeout: 0,
+        customCode: ''
+      });
+    }
+    
+    const flagData = breakFlagData.get(selectedFlag.id);
+    
+    // Timeout section
+    const timeoutSection = document.createElement('div');
+    timeoutSection.className = 'timeout-section';
+    timeoutSection.innerHTML = `
+      <div class="timeout-label-container">
+        <label class="timeout-label">Timeout (ms)</label>
+      </div>
+      <div class="timeout-input-container">
+        <span class="delay-label">delay:</span>
+        <input type="number" id="timeoutInput" class="timeout-input" value="${flagData.timeout}" min="0" step="1" />
+      </div>
+    `;
+    extraSidebar.appendChild(timeoutSection);
+    
+    // Add event listener for timeout input
+    const timeoutInput = document.getElementById('timeoutInput');
+    timeoutInput.addEventListener('input', (e) => {
+      const value = parseInt(e.target.value) || 0;
+      flagData.timeout = Math.max(0, value);
+      updateDataSidebar();
+      updateCustomCodePlaceholder(); // Update the delay comment
+    });
+    
+    // Custom code section with syntax highlighting container
+    const customCodeSection = document.createElement('div');
+    customCodeSection.className = 'custom-code-section';
+    
+    const label = document.createElement('label');
+    label.className = 'custom-code-label';
+    label.textContent = 'Custom Code';
+    customCodeSection.appendChild(label);
+    
+    // Create wrapper for syntax highlighting
+    const editorWrapper = document.createElement('div');
+    editorWrapper.className = 'code-editor-wrapper';
+    editorWrapper.style.position = 'relative';
+    
+    // Create syntax highlighted pre element (background)
+    const highlighted = document.createElement('pre');
+    highlighted.className = 'code-highlight';
+    highlighted.style.position = 'absolute';
+    highlighted.style.top = '0';
+    highlighted.style.left = '0';
+    highlighted.style.right = '0';
+    highlighted.style.bottom = '0';
+    highlighted.style.margin = '0';
+    highlighted.style.padding = '10px';
+    highlighted.style.pointerEvents = 'none';
+    highlighted.style.whiteSpace = 'pre-wrap';
+    highlighted.style.wordWrap = 'break-word';
+    highlighted.style.fontFamily = "'Courier New', monospace";
+    highlighted.style.fontSize = '13px';
+    highlighted.style.lineHeight = '1.5';
+    highlighted.style.color = 'transparent';
+    highlighted.style.background = 'transparent';
+    highlighted.style.overflow = 'hidden';
+    
+    // Create textarea (foreground - transparent text)
+    // Create textarea (foreground - transparent text for highlighting to show through)
+// Create textarea (foreground - transparent text for highlighting to show through)
+const textarea = document.createElement('textarea');
+textarea.id = 'customCodeInput';
+textarea.className = 'custom-code-textarea';
+textarea.style.position = 'relative';
+textarea.style.background = 'transparent';
+textarea.style.color = 'transparent'; // Make text transparent so highlighting shows
+textarea.style.caretColor = '#fff';
+
+// If no custom code exists, set initial comment template
+if (!flagData.customCode || flagData.customCode.trim() === '') {
+  flagData.customCode = `// Enter C++ code here...\n\n//pros::delay(${flagData.timeout});`;
+}
+
+textarea.value = flagData.customCode;
+    
+    editorWrapper.appendChild(highlighted);
+    editorWrapper.appendChild(textarea);
+    customCodeSection.appendChild(editorWrapper);
+    extraSidebar.appendChild(customCodeSection);
+    
+    // Function to update placeholder
+    // Function to update the delay comment in the code
+function updateCustomCodePlaceholder() {
+  if (flagData.customCode && flagData.customCode.includes('//pros::delay(')) {
+    // Update existing delay comment
+    flagData.customCode = flagData.customCode.replace(
+      /\/\/pros::delay\(\d+\);/g,
+      `//pros::delay(${flagData.timeout});`
+    );
+    textarea.value = flagData.customCode;
+    updateHighlight();
+  }
+}
+
+// Function to apply syntax highlighting
+// Function to apply syntax highlighting
+// Function to apply syntax highlighting
+function applySyntaxHighlight(code) {
+  if (!code || code.trim() === '') {
+    return '<span style="color: #6a9955;">// Enter C++ code here...</span>';
+  }
+  
+  // DON'T escape HTML - we'll handle special chars as we go
+  let highlighted = code;
+  
+  // Create an array to track which characters have been highlighted
+  const tokens = [];
+  let i = 0;
+  
+  while (i < highlighted.length) {
+    let matched = false;
+    
+    // Check for comments first (highest priority)
+    if (highlighted.substr(i, 2) === '//') {
+      const end = highlighted.indexOf('\n', i);
+      const comment = end === -1 ? highlighted.substr(i) : highlighted.substring(i, end);
+      // Escape HTML entities in comment
+      const escapedComment = comment.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      tokens.push(`<span style="color: #6a9955;">${escapedComment}</span>`);
+      i += comment.length;
+      continue;
+    }
+    
+    if (highlighted.substr(i, 2) === '/*') {
+      const end = highlighted.indexOf('*/', i);
+      if (end !== -1) {
+        const comment = highlighted.substring(i, end + 2);
+        const escapedComment = comment.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        tokens.push(`<span style="color: #6a9955;">${escapedComment}</span>`);
+        i += comment.length;
+        continue;
+      }
+    }
+    
+    // Check for strings
+    if (highlighted[i] === '"') {
+      let j = i + 1;
+      while (j < highlighted.length && (highlighted[j] !== '"' || highlighted[j-1] === '\\')) {
+        j++;
+      }
+      if (j < highlighted.length) {
+        const str = highlighted.substring(i, j + 1);
+        const escapedStr = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        tokens.push(`<span style="color: #ce9178;">${escapedStr}</span>`);
+        i = j + 1;
+        continue;
+      }
+    }
+    
+    // Check for numbers
+    if (/\d/.test(highlighted[i])) {
+      let j = i;
+      while (j < highlighted.length && /[\d.]/.test(highlighted[j])) {
+        j++;
+      }
+      const num = highlighted.substring(i, j);
+      tokens.push(`<span style="color: #ff0000ff;">${num}</span>`);
+      i = j;
+      continue;
+    }
+    
+    // Check for keywords and identifiers
+    if (/[a-zA-Z_]/.test(highlighted[i])) {
+      let j = i;
+      while (j < highlighted.length && /[a-zA-Z0-9_]/.test(highlighted[j])) {
+        j++;
+      }
+      const word = highlighted.substring(i, j);
+      const keywords = ['if', 'else', 'while', 'for', 'return', 'true', 'false', 'void', 'int', 'float', 'double', 'char', 'bool', 'class', 'struct', 'namespace', 'using', 'include', 'define', 'ifdef', 'endif', 'pragma', 'const', 'static', 'auto', 'break', 'continue', 'switch', 'case', 'default'];
+      
+      // Check if next non-whitespace char is '(' for function calls
+      let k = j;
+      while (k < highlighted.length && /\s/.test(highlighted[k])) {
+        k++;
+      }
+      
+      if (keywords.includes(word)) {
+        tokens.push(`<span style="color: #f9a412ff;">${word}</span>`); // KEYWORDS COLOR
+      } else if (highlighted[k] === '(') {
+        tokens.push(`<span style="color: #1e9eeeff;">${word}</span>`); // FUNCTION CALLS COLOR
+      } else {
+        tokens.push(`<span style="color: #b397a8ff;">${word}</span>`); // VARIABLES/IDENTIFIERS COLOR
+      }
+      i = j;
+      continue;
+    }
+    
+    // Check for preprocessor
+    if (highlighted[i] === '#') {
+      let j = i + 1;
+      while (j < highlighted.length && /[a-zA-Z_]/.test(highlighted[j])) {
+        j++;
+      }
+      const prep = highlighted.substring(i, j);
+      tokens.push(`<span style="color: #259571ff;">${prep}</span>`); // PREPROCESSOR COLOR
+      i = j;
+      continue;
+    }
+    
+    // Handle special characters that need escaping
+    if (highlighted[i] === '<') {
+      tokens.push(`<span style="color: #d4d4d4;">&lt;</span>`); // PUNCTUATION COLOR
+      i++;
+      continue;
+    }
+    
+    if (highlighted[i] === '>') {
+      tokens.push(`<span style="color: #d4d4d4;">&gt;</span>`); // PUNCTUATION COLOR
+      i++;
+      continue;
+    }
+    
+    if (highlighted[i] === '&') {
+      tokens.push(`<span style="color: #d4d4d4;">&amp;</span>`); // PUNCTUATION COLOR
+      i++;
+      continue;
+    }
+    
+    // Punctuation and operators
+    if (/[(){}\[\];,.]/.test(highlighted[i])) {
+      tokens.push(`<span style="color: #a66ab6ff;">${highlighted[i]}</span>`); // PUNCTUATION COLOR
+      i++;
+      continue;
+    }
+    
+    // Whitespace and everything else
+    tokens.push(`<span style="color: #d4d4d4;">${highlighted[i]}</span>`); // DEFAULT COLOR
+    i++;
+  }
+  
+  return tokens.join('');
+}
+    
+    // Sync scroll and update highlighting
+    function syncScroll() {
+      highlighted.scrollTop = textarea.scrollTop;
+      highlighted.scrollLeft = textarea.scrollLeft;
+    }
+    
+    function updateHighlight() {
+  const code = textarea.value;
+  highlighted.innerHTML = applySyntaxHighlight(code);
+  syncScroll();
+}
+    
+    // Handle input with highlighting
+    textarea.addEventListener('input', (e) => {
+      flagData.customCode = e.target.value;
+      updateHighlight();
+    });
+    
+    textarea.addEventListener('scroll', syncScroll);
+    
+    // Handle tab key to insert 4 spaces
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+        
+        // Insert 4 spaces
+        textarea.value = value.substring(0, start) + '    ' + value.substring(end);
+        
+        // Move cursor after the inserted spaces
+        textarea.selectionStart = textarea.selectionEnd = start + 4;
+        
+        // Trigger input event to update highlighting
+        flagData.customCode = textarea.value;
+        updateHighlight();
+      }
+      
+      // Auto-complete brackets and parentheses
+      if (e.key === '(' || e.key === '{' || e.key === '[') {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+        
+        const pairs = {
+          '(': ')',
+          '{': '}',
+          '[': ']'
+        };
+        
+        const closing = pairs[e.key];
+        textarea.value = value.substring(0, start) + e.key + closing + value.substring(end);
+        
+        // Move cursor between the pair
+        textarea.selectionStart = textarea.selectionEnd = start + 1;
+        
+        flagData.customCode = textarea.value;
+        updateHighlight();
+      }
+    });
+    
+    // Initial highlight
+    updateHighlight();
+    
+  } else {
+    // Show empty state
+    const emptyState = document.createElement('div');
+    emptyState.className = 'empty-state';
+    emptyState.textContent = 'Select a break flag to edit its properties';
+    extraSidebar.appendChild(emptyState);
+  }
+}
+
+// Update the selectBreakFlag function to refresh the right sidebar
+const originalSelectBreakFlag = selectBreakFlag;
+selectBreakFlag = function(flagObj) {
+  originalSelectBreakFlag(flagObj);
+  updateRightExtraSidebar();
+};
+
 // Initialize all buttons when page loads
+// Find this section and add the new button:
 window.addEventListener('load', () => {
   createRightSidebarButtons();
   createLeftSidebarButtons();
   createCollapseButton();
-  createDataSidebar(); // Create data sidebar on load (but keep it hidden)
+  createRightCollapseButton();
+  createDataSidebar();
+  createRightExtraSidebar(); // ADD THIS LINE - create it immediately but keep it hidden
 });
+
+// Download functionality
+function downloadState() {
+  // Gather all state data
+  const state = {
+    version: "1.0",
+    fieldSize: {
+      length: fieldSizeL,
+      width: fieldSizeW
+    },
+    settings: {
+      startAtZero: startAtZero,
+      colorScheme: currentColorScheme,
+      unit: currentUnit,
+      drivebaseColor: drivebaseColor,
+      robotSizeColor: robotSizeColor,
+      headingColor: headingColor
+    },
+    robotDimensions: {
+      drivebaseL: drivebaseL,
+      drivebaseW: drivebaseW,
+      robotSizeL: robotSizeL,
+      robotSizeW: robotSizeW
+    },
+    points: spawnedPoints.map((point, idx) => {
+      const rect = point.getBoundingClientRect();
+      const centerX = rwidth / 2;
+      const centerY = rheight / 2;
+      
+      return {
+        index: idx,
+        relX: point.relX || (rect.left + rect.width / 2 - centerX) / iwidth,
+        relY: point.relY || (rect.top + rect.height / 2 - centerY) / iwidth,
+        isAtZero: point.isAtZero || false,
+        imageSrc: point.src,
+        heading: pointHeadings.has(point) ? pointHeadings.get(point) : null
+      };
+    }),
+    curves: spawnedCurves.map(curve => {
+      const img1Index = spawnedPoints.indexOf(curve.img1);
+      const img2Index = spawnedPoints.indexOf(curve.img2);
+      
+      return {
+        img1Index: img1Index,
+        img2Index: img2Index,
+        controlOffsets: curve.controlOffsets,
+        id: curve.id
+      };
+    }),
+    breakFlags: breakFlags.map(flag => {
+      let attachedToIndex = -1;
+      
+      if (flag.attachedType === 'point') {
+        attachedToIndex = spawnedPoints.indexOf(flag.attachedTo);
+      } else if (flag.attachedType === 'line') {
+        attachedToIndex = spawnedCurves.indexOf(flag.attachedTo);
+      }
+      
+      return {
+        attachedType: flag.attachedType,
+        attachedToIndex: attachedToIndex,
+        t: flag.t || 0.5,
+        id: flag.id
+      };
+    })
+  };
+  
+  const jsonString = JSON.stringify(state, null, 2);
+  const blob = new Blob([jsonString], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `path_${Date.now()}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  console.log('✅ State downloaded successfully');
+}
+
+// Upload functionality
+function uploadState(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const state = JSON.parse(event.target.result);
+      restoreState(state);
+      console.log('✅ State uploaded successfully');
+    } catch (error) {
+      console.error('❌ Error parsing file:', error);
+      alert('Error: Invalid file format');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function restoreState(state) {
+  clearAll();
+  
+  fieldSizeL = state.fieldSize.length;
+  fieldSizeW = state.fieldSize.width;
+  updateInchCalculation();
+  
+  startAtZero = state.settings.startAtZero;
+  currentColorScheme = state.settings.colorScheme;
+  currentUnit = state.settings.unit;
+  drivebaseColor = state.settings.drivebaseColor;
+  robotSizeColor = state.settings.robotSizeColor;
+  headingColor = state.settings.headingColor;
+  
+  drivebaseL = state.robotDimensions.drivebaseL;
+  drivebaseW = state.robotDimensions.drivebaseW;
+  robotSizeL = state.robotDimensions.robotSizeL;
+  robotSizeW = state.robotDimensions.robotSizeW;
+  
+  const restoredPoints = [];
+  state.points.forEach(pointData => {
+    const centerX = rwidth / 2;
+    const centerY = rheight / 2;
+    const imgSrc = pointData.imageSrc;
+    
+    const image = new Image(pwidth, pwidth);
+    image.src = imgSrc;
+    image.style.opacity = "0.75";
+    image.style.position = "absolute";
+    image.draggable = false;
+    image.classList.add("spawned-point");
+    
+    const x = centerX + pointData.relX * iwidth;
+    const y = centerY + pointData.relY * iwidth;
+    
+    image.style.left = (x - pwidth / 2) + "px";
+    image.style.top = (y - pwidth / 2) + "px";
+    image.relX = pointData.relX;
+    image.relY = pointData.relY;
+    image.isAtZero = pointData.isAtZero;
+    
+    document.body.appendChild(image);
+    
+    image.oncontextmenu = () => false;
+    image.addEventListener("mousedown", function (e) {
+      if (e.button === 0) {
+        e.stopPropagation();
+        window.clickedOnPoint = true;
+        dragging = image;
+        isDragging = true;
+        const rect = image.getBoundingClientRect();
+        offsetX = e.clientX - rect.left;
+        offsetY = e.clientY - rect.top;
+        image.style.transition = "none";
+        selectPoint(image);
+      }
+    });
+    
+    image.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = image.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      createBreakFlag(centerX, centerY, image, 'point');
+    });
+    
+    spawnedPoints.push(image);
+    spawnedImages.push(image);
+    restoredPoints.push(image);
+    
+    if (pointData.heading !== null) {
+      pointHeadings.set(image, pointData.heading);
+    }
+  });
+  
+  state.curves.forEach(curveData => {
+    const img1 = restoredPoints[curveData.img1Index];
+    const img2 = restoredPoints[curveData.img2Index];
+    
+    if (img1 && img2) {
+      const curve = createCurve(img1, img2);
+      curve.controlOffsets = curveData.controlOffsets;
+      curve.id = curveData.id;
+      curve.update();
+    }
+  });
+  
+  state.breakFlags.forEach(flagData => {
+    let attachedTo = null;
+    
+    if (flagData.attachedType === 'point') {
+      attachedTo = restoredPoints[flagData.attachedToIndex];
+    } else if (flagData.attachedType === 'line') {
+      attachedTo = spawnedCurves[flagData.attachedToIndex];
+    }
+    
+    if (attachedTo) {
+      let x, y;
+      if (flagData.attachedType === 'point') {
+        const rect = attachedTo.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.top + rect.height / 2;
+      } else if (flagData.attachedType === 'line' && attachedTo.evaluateCurve) {
+        const point = attachedTo.evaluateCurve(flagData.t);
+        x = point.x;
+        y = point.y;
+      }
+      
+      const flag = createBreakFlag(x, y, attachedTo, flagData.attachedType);
+      flag.t = flagData.t;
+      flag.id = flagData.id;
+    }
+  });
+  
+  updateSettingsSidebar();
+  updateSidebar();
+  updateAllCurves();
+  recomputeAllPositions();
+  updateDataSidebar();
+}
+
+function clearAll() {
+  spawnedPoints.forEach(p => p.remove());
+  spawnedPoints = [];
+  spawnedImages = [];
+  
+  spawnedCurves.forEach(c => {
+    if (c.circleGroup) c.circleGroup.remove();
+    if (c.handleGroup) c.handleGroup.remove();
+    if (c.handle) c.handle.remove();
+    if (c.hitboxPath) c.hitboxPath.remove();
+    if (c.vizGroup) c.vizGroup.remove();
+  });
+  spawnedCurves = [];
+  
+  breakFlags.forEach(f => f.el.remove());
+  breakFlags = [];
+  
+  pointHeadings.clear();
+  
+  selectedPoint = null;
+  activeCurve = null;
+  
+  updateSidebar();
+  updateDataSidebar();
+}
 
 const iconPositions1a = [
   { x: -0.1, y: -0.16 },
@@ -2695,6 +4139,8 @@ document.addEventListener("keydown", e => {
     e.stopPropagation();
   }
 });
+
+
 //   input.addEventListener("keydown", e => {
 //     if ((e.key === "Backspace" || e.key === "Delete")) {
 //       e.stopPropagation();
